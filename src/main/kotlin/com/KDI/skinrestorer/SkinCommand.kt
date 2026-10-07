@@ -1,4 +1,4 @@
-package com.kodari.skinrestorer
+package com.KDI.skinrestorer
 
 import org.bukkit.Bukkit
 import org.bukkit.ChatColor

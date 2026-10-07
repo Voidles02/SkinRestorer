@@ -1,4 +1,4 @@
-package com.kodari.skinrestorer
+package com.KDI.skinrestorer
 
 import org.bukkit.Bukkit
 import org.bukkit.entity.Player
@@ -9,16 +9,23 @@ import org.bukkit.profile.PlayerTextures
 import org.bukkit.plugin.java.JavaPlugin
 import java.net.URI
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 
 class SkinManager(
     private val plugin: JavaPlugin,
     private val service: MojangSkinService,
     private val storage: SkinStorage
 ) {
+    private class PendingRequest {
+        var future: CompletableFuture<SkinData>? = null
+    }
+
     private val originalProfiles = mutableMapOf<UUID, PaperPlayerProfile>()
-    private val pendingRequests = mutableMapOf<UUID, Any>()
+    private val pendingRequests = ConcurrentHashMap<UUID, PendingRequest>()
     private val restorationRetries = mutableMapOf<UUID, BukkitTask>()
     private val restorationAttempts = mutableMapOf<UUID, Int>()
+    @Volatile private var closed = false
 
     fun onJoin(player: Player) {
         cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
@@ -41,9 +48,19 @@ class SkinManager(
     }
 
     fun onQuit(player: Player) {
-        pendingRequests.remove(player.uniqueId)
+        pendingRequests.remove(player.uniqueId)?.future?.cancel(true)
         cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
         originalProfiles.remove(player.uniqueId)
+    }
+
+    fun shutdown() {
+        closed = true
+        pendingRequests.values.forEach { it.future?.cancel(true) }
+        pendingRequests.clear()
+        restorationRetries.values.forEach { it.cancel() }
+        restorationRetries.clear()
+        restorationAttempts.clear()
+        originalProfiles.clear()
     }
 
     fun setByName(player: Player, name: String, completion: (Result<SkinData>) -> Unit) {
@@ -81,7 +98,7 @@ class SkinManager(
     }
 
     fun clear(player: Player) {
-        pendingRequests.remove(player.uniqueId)
+        pendingRequests.remove(player.uniqueId)?.future?.cancel(true)
         cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
         storage.remove(player.uniqueId)
         restoreDefault(player)
@@ -140,17 +157,23 @@ class SkinManager(
         completion: (Result<SkinData>) -> Unit,
         fetch: () -> SkinData
     ) {
-        val request = Any()
-        pendingRequests[player.uniqueId] = request
+        if (closed) {
+            completion(Result.failure(IllegalStateException("Skin restoration is shutting down.")))
+            return
+        }
+        val request = PendingRequest()
+        pendingRequests.put(player.uniqueId, request)?.future?.cancel(true)
         val future = try {
             service.submit(fetch)
         } catch (exception: Exception) {
-            pendingRequests.remove(player.uniqueId)
+            pendingRequests.remove(player.uniqueId, request)
             if (fallbackOnFailure) restoreDefault(player)
             completion(Result.failure(exception))
             return
         }
+        request.future = future
         future.whenComplete { skin, throwable ->
+            if (closed || pendingRequests[player.uniqueId] !== request) return@whenComplete
             val result = if (throwable == null) Result.success(skin) else {
                 Result.failure(throwable.cause ?: throwable)
             }
@@ -182,7 +205,10 @@ class SkinManager(
                     )
                 })
             } catch (exception: Exception) {
-                plugin.logger.warning("Could not schedule skin result for ${player.name}: ${exception.message}")
+                pendingRequests.remove(player.uniqueId, request)
+                if (!closed) {
+                    plugin.logger.warning("Could not schedule skin result for ${player.name}: ${exception.message}")
+                }
             }
         }
     }

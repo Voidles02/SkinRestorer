@@ -1,4 +1,4 @@
-package com.kodari.skinrestorer
+package com.KDI.skinrestorer
 
 import com.google.gson.JsonParser
 import org.bukkit.profile.PlayerTextures
@@ -15,6 +15,8 @@ import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CompletionException
+import java.util.concurrent.Future
+import java.util.concurrent.FutureTask
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.ThreadPoolExecutor
@@ -44,11 +46,36 @@ class MojangSkinService {
         ThreadPoolExecutor.AbortPolicy()
     )
 
-    fun submit(fetch: () -> SkinData): CompletableFuture<SkinData> =
-        CompletableFuture.supplyAsync({ fetch() }, networkExecutor)
+    fun submit(fetch: () -> SkinData): CompletableFuture<SkinData> {
+        val result = CompletableFuture<SkinData>()
+        val task = object : FutureTask<Unit>({
+            try {
+                result.complete(fetch())
+            } catch (exception: Throwable) {
+                result.completeExceptionally(exception)
+            }
+        }, Unit) {
+            override fun done() {
+                if (isCancelled) result.cancel(true)
+            }
+        }
+        result.whenComplete { _, _ ->
+            if (result.isCancelled) {
+                task.cancel(true)
+                networkExecutor.remove(task)
+            }
+        }
+        try {
+            networkExecutor.execute(task)
+        } catch (exception: Exception) {
+            task.cancel(false)
+            throw exception
+        }
+        return result
+    }
 
     fun shutdown() {
-        networkExecutor.shutdownNow()
+        networkExecutor.shutdownNow().forEach { (it as? Future<*>)?.cancel(true) }
     }
 
     fun fetchByName(name: String): SkinData {
@@ -173,7 +200,18 @@ class MojangSkinService {
             .header("User-Agent", USER_AGENT)
             .GET()
             .build()
-        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
+        val body = response.body().use { stream ->
+            if (response.statusCode() in 200..299) {
+                val bytes = stream.readNBytes(MAX_MOJANG_RESPONSE_BYTES + 1)
+                if (bytes.size > MAX_MOJANG_RESPONSE_BYTES) {
+                    throw IllegalStateException("Mojang returned an unexpectedly large response.")
+                }
+                String(bytes, Charsets.UTF_8)
+            } else {
+                null
+            }
+        }
         if (response.statusCode() == 429) {
             val now = System.currentTimeMillis()
             val retryMillis = response.headers().firstValue("Retry-After").orElse(null)
@@ -191,7 +229,7 @@ class MojangSkinService {
         if (response.statusCode() !in 200..299) {
             throw IllegalStateException("Mojang returned HTTP ${response.statusCode()}.")
         }
-        return response.body()
+        return requireNotNull(body)
     }
 
     private fun isSkinPng(bytes: ByteArray): Boolean {
@@ -208,10 +246,11 @@ class MojangSkinService {
         private val CACHE_NANOS = TimeUnit.DAYS.toNanos(7)
         private const val MAX_CACHED_SKINS = 2048
         private const val DEFAULT_BACKOFF_SECONDS = 60L
+        private const val MAX_MOJANG_RESPONSE_BYTES = 256 * 1024
         private const val MAX_IMAGE_BYTES = 10 * 1024 * 1024
         private const val NETWORK_THREADS = 4
         private const val NETWORK_QUEUE_SIZE = 128
-        private const val USER_AGENT = "KodariSkinRestorer/1.0"
+        private const val USER_AGENT = "SkinRestorer/12-Bh-Alpa.v1.23mc"
         private val RANDOM_NAMES = listOf("Notch", "jeb_", "Dinnerbone", "Grumm", "Searge", "MHF_Creeper")
     }
 }

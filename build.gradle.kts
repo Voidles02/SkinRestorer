@@ -2,8 +2,8 @@ plugins {
     kotlin("jvm") version "2.2.20"
 }
 
-group = "KDI"
-version = "1.2.0"
+group = "com.KDI"
+version = "12-Bh-Alpa.v1.23mc"
 
 repositories {
     mavenCentral()

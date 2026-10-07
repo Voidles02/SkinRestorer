@@ -1,6 +1,6 @@
 # SkinRestorer
 
-SkinRestorer is a Paper plugin for restoring player skins on online-mode and offline-mode servers. Version `1.2.0` is maintained by `voidles02`, targets Paper 1.21.8, and requires Java 25.
+SkinRestorer is a Paper plugin for restoring player skins on online-mode and offline-mode servers. Version `12-Bh-Alpa.v1.23mc` is maintained by `voidles02`, targets Paper 1.21.8, and requires Java 25.
 
 ## Installation
 

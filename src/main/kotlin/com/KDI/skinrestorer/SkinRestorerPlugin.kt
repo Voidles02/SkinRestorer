@@ -1,4 +1,4 @@
-package com.kodari.skinrestorer
+package com.KDI.skinrestorer
 
 import org.bukkit.ChatColor
 import org.bukkit.event.EventHandler
@@ -36,6 +36,7 @@ class SkinRestorerPlugin : JavaPlugin(), Listener {
     }
 
     override fun onDisable() {
+        if (::skinManager.isInitialized) skinManager.shutdown()
         if (::skinStorage.isInitialized) skinStorage.flush()
         if (::skinService.isInitialized) skinService.shutdown()
     }

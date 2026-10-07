@@ -1,7 +1,7 @@
 name: SkinRestorer
-version: 1.2.0
+version: 12-Bh-Alpa.v1.23mc
 author: voidles02
-main: com.kodari.skinrestorer.SkinRestorerPlugin
+main: com.KDI.skinrestorer.SkinRestorerPlugin
 api-version: '1.21'
 description: Restores and manages player skins in offline and online mode.
 commands:

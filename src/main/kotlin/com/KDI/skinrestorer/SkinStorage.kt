@@ -1,4 +1,4 @@
-package com.kodari.skinrestorer
+package com.KDI.skinrestorer
 
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
@@ -131,8 +131,16 @@ class SkinStorage(private val plugin: JavaPlugin) {
     private fun save(snapshot: Map<UUID, SkinData>) {
         try {
             plugin.dataFolder.mkdirs()
-            val json = snapshot.entries.associate { it.key.toString() to it.value }
-            temporaryFile.writeText(gson.toJson(json))
+            Files.newBufferedWriter(temporaryFile.toPath(), Charsets.UTF_8).use { output ->
+                val json = gson.newJsonWriter(output)
+                json.beginObject()
+                snapshot.forEach { (playerId, skin) ->
+                    json.name(playerId.toString())
+                    gson.toJson(skin, SkinData::class.java, json)
+                }
+                json.endObject()
+                json.flush()
+            }
             try {
                 Files.move(
                     temporaryFile.toPath(),
