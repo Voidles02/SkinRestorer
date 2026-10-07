@@ -2,7 +2,9 @@ package com.kodari.skinrestorer
 
 import org.bukkit.Bukkit
 import org.bukkit.entity.Player
+import org.bukkit.scheduler.BukkitTask
 import com.destroystokyo.paper.profile.PlayerProfile as PaperPlayerProfile
+import com.destroystokyo.paper.profile.ProfileProperty
 import org.bukkit.profile.PlayerTextures
 import org.bukkit.plugin.java.JavaPlugin
 import java.net.URI
@@ -15,14 +17,16 @@ class SkinManager(
 ) {
     private val originalProfiles = mutableMapOf<UUID, PaperPlayerProfile>()
     private val pendingRequests = mutableMapOf<UUID, Any>()
+    private val restorationRetries = mutableMapOf<UUID, BukkitTask>()
+    private val restorationAttempts = mutableMapOf<UUID, Int>()
 
     fun onJoin(player: Player) {
+        cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
         originalProfiles.putIfAbsent(player.uniqueId, createPaperProfile(player))
         val saved = storage.get(player.uniqueId)
         if (saved != null && (!saved.automaticallyRestored || !plugin.server.onlineMode)) {
             val restored = runCatching { apply(player, saved) }.onFailure { exception ->
                 plugin.logger.warning("Could not restore ${player.name}'s saved skin: ${exception.message}")
-                storage.remove(player.uniqueId)
                 restoreDefault(player)
             }.isSuccess
             if (!plugin.server.onlineMode && saved.automaticallyRestored) {
@@ -38,28 +42,33 @@ class SkinManager(
 
     fun onQuit(player: Player) {
         pendingRequests.remove(player.uniqueId)
+        cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
         originalProfiles.remove(player.uniqueId)
     }
 
     fun setByName(player: Player, name: String, completion: (Result<SkinData>) -> Unit) {
+        cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
         fetchAndApply(player, persist = true, fallbackOnFailure = false, completion) {
             service.fetchByName(name)
         }
     }
 
     fun setUrl(player: Player, url: String, model: String, completion: (Result<SkinData>) -> Unit) {
+        cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
         fetchAndApply(player, persist = true, fallbackOnFailure = false, completion) {
             service.fetchUrl(url, model)
         }
     }
 
     fun setRandom(player: Player, completion: (Result<SkinData>) -> Unit) {
+        cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
         fetchAndApply(player, persist = true, fallbackOnFailure = false, completion) {
             service.fetchRandom()
         }
     }
 
     fun update(player: Player, completion: (Result<SkinData>) -> Unit) {
+        cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
         val saved = storage.get(player.uniqueId)
         val playerName = player.name
         fetchAndApply(player, persist = true, fallbackOnFailure = false, completion) {
@@ -73,16 +82,55 @@ class SkinManager(
 
     fun clear(player: Player) {
         pendingRequests.remove(player.uniqueId)
+        cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
         storage.remove(player.uniqueId)
         restoreDefault(player)
     }
 
     private fun refreshOfflineSkin(player: Player, name: String, fallbackOnFailure: Boolean) {
         fetchAndApply(player, persist = false, fallbackOnFailure = fallbackOnFailure, completion = { result ->
-            result.getOrNull()?.let { storage.put(player.uniqueId, it.copy(automaticallyRestored = true)) }
+            result.fold(
+                { skin ->
+                    restorationAttempts.remove(player.uniqueId)
+                    storage.put(player.uniqueId, skin.copy(automaticallyRestored = true))
+                },
+                { scheduleOfflineRestoreRetry(player, name) }
+            )
         }) {
             service.fetchByName(name)
         }
+    }
+
+    private fun scheduleOfflineRestoreRetry(player: Player, name: String) {
+        val playerId = player.uniqueId
+        if (!player.isOnline || plugin.server.onlineMode || restorationRetries.containsKey(playerId)) return
+
+        val attempt = (restorationAttempts[playerId] ?: 0) + 1
+        if (attempt > MAX_RESTORE_RETRIES) {
+            restorationAttempts.remove(playerId)
+            return
+        }
+
+        restorationAttempts[playerId] = attempt
+        val delay = minOf(20L shl (attempt - 1), MAX_RETRY_DELAY_TICKS)
+        try {
+            restorationRetries[playerId] = plugin.server.scheduler.runTaskLater(plugin, Runnable {
+                restorationRetries.remove(playerId)
+                if (player.isOnline && !plugin.server.onlineMode) {
+                    refreshOfflineSkin(player, name, fallbackOnFailure = storage.get(playerId) == null)
+                } else {
+                    restorationAttempts.remove(playerId)
+                }
+            }, delay)
+        } catch (exception: Exception) {
+            restorationAttempts.remove(playerId)
+            plugin.logger.warning("Could not schedule an automatic skin restore retry: ${exception.message}")
+        }
+    }
+
+    private fun cancelOfflineRestoreRetry(playerId: UUID, resetAttempts: Boolean) {
+        restorationRetries.remove(playerId)?.cancel()
+        if (resetAttempts) restorationAttempts.remove(playerId)
     }
 
     private fun fetchAndApply(
@@ -142,14 +190,19 @@ class SkinManager(
     private fun apply(player: Player, skin: SkinData) {
         originalProfiles.putIfAbsent(player.uniqueId, createPaperProfile(player))
         val profile = createPaperProfile(player)
-        val textures = profile.textures
-        val skinModel = if (skin.model.equals("slim", true)) {
-            PlayerTextures.SkinModel.SLIM
+        if (!skin.textureValue.isNullOrBlank()) {
+            profile.removeProperty("textures")
+            profile.setProperty(ProfileProperty("textures", skin.textureValue, skin.textureSignature))
         } else {
-            PlayerTextures.SkinModel.CLASSIC
+            val textures = profile.textures
+            val skinModel = if (skin.model.equals("slim", true)) {
+                PlayerTextures.SkinModel.SLIM
+            } else {
+                PlayerTextures.SkinModel.CLASSIC
+            }
+            textures.setSkin(URI(skin.textureUrl).toURL(), skinModel)
+            profile.setTextures(textures)
         }
-        textures.setSkin(URI(skin.textureUrl).toURL(), skinModel)
-        profile.setTextures(textures)
         player.setPlayerProfile(profile)
         refreshViewers(player)
     }
@@ -160,10 +213,13 @@ class SkinManager(
         refreshViewers(player)
     }
 
-    private fun createPaperProfile(player: Player): PaperPlayerProfile =
-        Bukkit.createProfile(player.uniqueId, player.name).apply {
-            setTextures(player.playerProfile.textures)
+    private fun createPaperProfile(player: Player): PaperPlayerProfile {
+        val source = player.playerProfile
+        return Bukkit.createProfile(player.uniqueId, player.name).apply {
+            setProperties(source.properties)
+            if (!hasProperty("textures")) setTextures(source.textures)
         }
+    }
 
     private fun refreshViewers(player: Player) {
         val viewers = Bukkit.getOnlinePlayers().filter { it != player && it.canSee(player) }
@@ -172,5 +228,10 @@ class SkinManager(
             if (!player.isOnline) return@Runnable
             viewers.filter { it.isOnline }.forEach { it.showPlayer(plugin, player) }
         }, 1L)
+    }
+
+    companion object {
+        private const val MAX_RESTORE_RETRIES = 5
+        private const val MAX_RETRY_DELAY_TICKS = 20L * 60 * 5
     }
 }

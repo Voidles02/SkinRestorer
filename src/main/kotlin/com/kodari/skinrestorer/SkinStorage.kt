@@ -26,11 +26,16 @@ class SkinStorage(private val plugin: JavaPlugin) {
     fun get(playerId: UUID): SkinData? = synchronized(lock) { entries[playerId] }
 
     fun put(playerId: UUID, skin: SkinData) {
-        update { entries[playerId] = skin }
+        update {
+            if (entries[playerId] == skin) false else {
+                entries[playerId] = skin
+                true
+            }
+        }
     }
 
     fun remove(playerId: UUID) {
-        update { entries.remove(playerId) }
+        update { entries.remove(playerId) != null }
     }
 
     fun flush() {
@@ -66,9 +71,9 @@ class SkinStorage(private val plugin: JavaPlugin) {
         }
     }
 
-    private fun update(change: () -> Unit) {
+    private fun update(change: () -> Boolean) {
         val scheduleSave = synchronized(lock) {
-            change()
+            if (!change()) return
             dirty = true
             if (saveScheduled) false else {
                 saveScheduled = true

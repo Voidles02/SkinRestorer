@@ -5,5 +5,7 @@ data class SkinData(
     val model: String? = null,
     val sourceName: String? = null,
     val sourceUrl: String? = null,
-    val automaticallyRestored: Boolean = false
+    val automaticallyRestored: Boolean = false,
+    val textureValue: String? = null,
+    val textureSignature: String? = null
 )

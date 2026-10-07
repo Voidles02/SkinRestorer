@@ -52,15 +52,14 @@ class MojangSkinService {
     }
 
     fun fetchByName(name: String): SkinData {
-        require(name.matches(Regex("[A-Za-z0-9_]{1,16}"))) { "That is not a valid Minecraft player name." }
+        require(PLAYER_NAME_PATTERN.matches(name)) { "That is not a valid Minecraft player name." }
         val key = name.lowercase(Locale.ROOT)
         val now = System.nanoTime()
         synchronized(cache) {
-            val iterator = cache.entries.iterator()
-            while (iterator.hasNext()) {
-                if (iterator.next().value.expiresAt <= now) iterator.remove()
+            cache[key]?.let { cached ->
+                if (cached.expiresAt > now) return cached.skin
+                cache.remove(key)
             }
-            cache[key]?.let { return it.skin }
         }
 
         val request = CompletableFuture<SkinData>()
@@ -111,7 +110,15 @@ class MojangSkinService {
             ?: throw IllegalStateException("No skin texture URL was returned for $name.")
         val model = texture.getAsJsonObject("metadata")?.get("model")?.asString
             ?: PlayerTextures.SkinModel.CLASSIC.name.lowercase(Locale.ROOT)
-        return SkinData(textureUrl, model, sourceName = name)
+        val signature = properties.firstOrNull { it.asJsonObject.get("name")?.asString == "textures" }
+            ?.asJsonObject?.get("signature")?.asString
+        return SkinData(
+            textureUrl = textureUrl,
+            model = model,
+            sourceName = name,
+            textureValue = encoded,
+            textureSignature = signature
+        )
     }
 
     fun fetchRandom(): SkinData {
@@ -197,6 +204,7 @@ class MojangSkinService {
     }
 
     companion object {
+        private val PLAYER_NAME_PATTERN = Regex("[A-Za-z0-9_]{1,16}")
         private val CACHE_NANOS = TimeUnit.DAYS.toNanos(7)
         private const val MAX_CACHED_SKINS = 2048
         private const val DEFAULT_BACKOFF_SECONDS = 60L
