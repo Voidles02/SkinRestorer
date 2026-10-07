@@ -1,0 +1,24 @@
+name: SkinRestorer
+version: 1.1.0
+author: voidles02
+main: com.kodari.skinrestorer.SkinRestorerPlugin
+api-version: '1.21'
+description: Restores and manages player skins in offline and online mode.
+commands:
+  skin:
+    description: Manage player skins.
+    usage: /skin <set|url|clear|update|random>
+    aliases: [skins]
+permissions:
+  skinsrestorer.command.set:
+    default: true
+  skinsrestorer.command.url:
+    default: true
+  skinsrestorer.command.clear:
+    default: true
+  skinsrestorer.command.update:
+    default: true
+  skinsrestorer.command.random:
+    default: true
+  skinsrestorer.admin:
+    default: op
