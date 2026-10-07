@@ -26,9 +26,10 @@ class SkinStorage(private val plugin: JavaPlugin) {
     fun get(playerId: UUID): SkinData? = synchronized(lock) { entries[playerId] }
 
     fun put(playerId: UUID, skin: SkinData) {
+        val normalizedSkin = skin.copy(automaticallyRestored = true)
         update {
-            if (entries[playerId] == skin) false else {
-                entries[playerId] = skin
+            if (entries[playerId] == normalizedSkin) false else {
+                entries[playerId] = normalizedSkin
                 true
             }
         }
@@ -63,8 +64,22 @@ class SkinStorage(private val plugin: JavaPlugin) {
         try {
             val type = object : TypeToken<Map<String, SkinData>>() {}.type
             val loaded: Map<String, SkinData> = gson.fromJson(file.readText(), type) ?: return
+            var needsMigration = false
             loaded.forEach { (id, skin) ->
-                runCatching { UUID.fromString(id) }.getOrNull()?.let { entries[it] = skin }
+                runCatching { UUID.fromString(id) }.getOrNull()?.let { playerId ->
+                    if (!skin.automaticallyRestored) needsMigration = true
+                    entries[playerId] = skin.copy(automaticallyRestored = true)
+                }
+            }
+            if (needsMigration) {
+                val shouldSchedule = synchronized(lock) {
+                    dirty = true
+                    if (saveScheduled) false else {
+                        saveScheduled = true
+                        true
+                    }
+                }
+                if (shouldSchedule) scheduleSave()
             }
         } catch (exception: Exception) {
             plugin.logger.warning("Could not load skins.json: ${exception.message}")
@@ -81,12 +96,16 @@ class SkinStorage(private val plugin: JavaPlugin) {
             }
         }
         if (scheduleSave) {
-            runCatching {
-                plugin.server.scheduler.runTaskAsynchronously(plugin, Runnable { savePending() })
-            }.onFailure { exception ->
-                synchronized(lock) { saveScheduled = false }
-                plugin.logger.warning("Could not schedule skins.json save: ${exception.message}")
-            }
+            scheduleSave()
+        }
+    }
+
+    private fun scheduleSave() {
+        runCatching {
+            plugin.server.scheduler.runTaskAsynchronously(plugin, Runnable { savePending() })
+        }.onFailure { exception ->
+            synchronized(lock) { saveScheduled = false }
+            plugin.logger.warning("Could not schedule skins.json save: ${exception.message}")
         }
     }
 

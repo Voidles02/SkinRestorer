@@ -24,12 +24,12 @@ class SkinManager(
         cancelOfflineRestoreRetry(player.uniqueId, resetAttempts = true)
         originalProfiles.putIfAbsent(player.uniqueId, createPaperProfile(player))
         val saved = storage.get(player.uniqueId)
-        if (saved != null && (!saved.automaticallyRestored || !plugin.server.onlineMode)) {
+        if (saved != null) {
             val restored = runCatching { apply(player, saved) }.onFailure { exception ->
                 plugin.logger.warning("Could not restore ${player.name}'s saved skin: ${exception.message}")
                 restoreDefault(player)
             }.isSuccess
-            if (!plugin.server.onlineMode && saved.automaticallyRestored) {
+            if (!plugin.server.onlineMode) {
                 refreshOfflineSkin(player, saved.sourceName ?: player.name, fallbackOnFailure = false)
                 return
             }
